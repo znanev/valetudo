@@ -22,26 +22,6 @@
     <script>
         window.fn = {};
 
-        var waitForLocalize = i18next.use(i18nextXHRBackend).init({
-            interpolation: {
-                format: function(value, format, lng) {
-                    if (format === 'lowercase') return value.toLowerCase();
-                    if (format === 'uppercase') return value.toUpperCase();
-                    return value;
-                }
-            },
-            lng: localStorage.getItem('settingsWebifLocalization') || 'en',
-            fallbackLng: '',
-            backend: {
-                loadPath: '/locales/{{lng}}.json'
-            },
-            debug: false
-        })
-        .then(res => { return locI18next.init(i18next,{selectorAttr: 'data-i18n', targetAttr: 'data-i18n-target' }); })
-        .catch(e => console.log('loading i18n has failed', e));
-
-        window.fn.localize = function(target) { waitForLocalize.then(res => res(target)) };
-
         window.fn.toggleMenu = function () {
             document.getElementById('appSplitter').left.toggle();
         };
@@ -85,46 +65,6 @@
             return document.getElementById('appNavigator').topPage;
         }
 
-        window.fn.request = function (url, method, callback) {
-            var request = new XMLHttpRequest();
-            request.open(method, url, true);
-
-            request.onload = function () {
-                if (request.status >= 200 && request.status < 400) {
-                    callback(null, JSON.parse(request.responseText));
-                } else {
-                    console.error(request);
-                    callback(i18next.t('common.commandFailed',"There was an error:") + " " + request.status + (request.responseText ? ' - ' + request.responseText : ''));
-                }
-            };
-
-            request.onerror = function () {
-                callback(i18next.t('common.connectionError',"Connection error") + (request.statusText ? ": " + request.statusText : ""));
-            };
-
-            request.send();
-        };
-
-        window.fn.requestWithPayload = function (url, payload, method, callback) {
-            var request = new XMLHttpRequest();
-            request.open(method, url, true);
-            request.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
-            request.send(payload);
-
-            request.onload = function () {
-                if (request.status >= 200 && request.status < 400) {
-                    callback(null, JSON.parse(request.responseText));
-                } else {
-                    console.error(request);
-                    callback(i18next.t('common.commandFailed',"There was an error:") + " " + request.status + (request.responseText ? ' - ' + request.responseText : ''));
-                }
-            };
-
-            request.onerror = function () {
-                callback(i18next.t('common.connectionError',"Connection error") + (request.statusText ? ": " + request.statusText : ""));
-            };
-        };
-
         window.fn.postFile = function (url, path, progressCallback, callback){
             var formData = new FormData();
             formData.append("file", path);
@@ -153,15 +93,16 @@
                 callback(i18next.t('common.connectionError',"Connection error") + (request.statusText ? ": " + request.statusText : ""));
             };
 
-            request.open("POST", url);
+            request.open("POST", (localStorage['urlOverride'] || '') + url);
             request.send(formData);
         }
 
         window.fn.prequest = function (url, method, type) {
             return new Promise(function(resolve, reject) {
+                method = method || "GET";
                 var request = new XMLHttpRequest();
                 if (type) request.responseType = type;
-                request.open(method, url, true);
+                request.open(method, (localStorage['urlOverride'] || '') + url, true);
                 request.onload = function () {
                     if (request.status >= 200 && request.status < 400) {
                         if (request.responseType === "") {
@@ -184,14 +125,16 @@
         window.fn.prequestWithPayload = function (url, payload, method, type) {
             return new Promise(function(resolve, reject) {
                 var request = new XMLHttpRequest();
-                request.open(method, url, true);
+                request.open(method, (localStorage['urlOverride'] || '') + url, true);
                 if (type) request.responseType = type;
                 request.setRequestHeader('Content-Type', 'application/json; charset=UTF-8');
                 request.send(payload);
 
                 request.onload = function () {
                     if (request.status >= 200 && request.status < 400) {
-                        resolve(JSON.parse(request.responseText));
+                        try {
+                            resolve(JSON.parse(request.responseText));
+                        } catch (e) { console.error(e); }
                     } else {
                         console.error(request);
                         reject(i18next.t('common.commandFailed',"There was an error:") + " " + request.status + (!type && request.responseText ? ' - ' + request.responseText : ''));
@@ -218,15 +161,21 @@
         window.fn.toastErrorTimeout = 5e3;
 
         window.fn.notificationToastOK = function(text,timeout) {
-            text = text || i18next.t('common.commandOK',"Command successfully sent!");
-            timeout = timeout || window.fn.toastOKTimeout;
-            label = i18next.t('common.dismiss',"Dismiss");
-            ons.notification.toast(text, { buttonLabel: label, timeout: timeout });
+            text = text && String(text) || i18next.t('common.commandOK',"Command successfully sent!");
+            timeout = timeout || fn.toastOKTimeout;
+            fn.notificationToastSend(text,timeout);
         }
 
         window.fn.notificationToastError = function(text,timeout) {
-            text = text || i18next.t('common.commandFailed',"That was an error") + '.';
-            timeout = timeout || window.fn.toastErrorTimeout;
+            text = text && String(text) || i18next.t('common.commandFailed',"There was an error").slice(0,-1) + '.';
+            timeout = timeout || fn.toastErrorTimeout;
+            fn.notificationToastSend(text,timeout);
+        }
+
+        window.fn.notificationToastSend = function(text, timeout) {
+            for (let toast of document.querySelectorAll('.toast .toast__message')) {
+                if (toast.textContent.trim() === text.trim()) return;
+            }
             label = i18next.t('common.dismiss',"Dismiss");
             ons.notification.toast(text, { buttonLabel: label, timeout: timeout });
         }
@@ -244,7 +193,60 @@
             fn.loadView(targetID);
         }
 
+        var waitForGlobals = fn.prequest("api/current_status")
+        .then(res => {
+            fn.device = {
+                model: res.model,
+                ver: res.msg_ver
+            };
+        }, err => {
+            fn.device = {
+                model: "unknown",
+                ver: 1
+            };
+        })
+        .then(res => fn.prequest("api/get_interface_config"))
+        .then(res => {
+            fn.webifSettings = res;
+            if(fn.webifSettings.style !== "" && fn.webifSettings.style !== undefined) {
+                document.head.insertAdjacentHTML('beforeend','<link rel="stylesheet" type="text/css" href="css/' + fn.webifSettings.style + '.css">');
+            }
+            return i18next.use(i18nextXHRBackend).init({
+                interpolation: {
+                    format: function(value, format, lng) {
+                        if (format === 'lowercase') return value.toLowerCase();
+                        if (format === 'uppercase') return value.toUpperCase();
+                        return value;
+                    }
+                },
+                lng: res.localization || '',
+                fallbackLng: '',
+                backend: {
+                    loadPath: '/locales/{{lng}}.json'
+                },
+                debug: false
+            })
+        })
+        .then(res => { window.fn.localize = locI18next.init(i18next,{selectorAttr: 'data-i18n', targetAttr: 'data-i18n-target' }); })
+        .catch(e => {
+            fn.localize = function() {};
+            console.error('loading interface configuration has failed', e);
+        });
+
+        if (ons.platform.isIPhoneX()) {
+            document.documentElement.setAttribute('onsflag-iphonex-portrait', '');
+        }
+    </script>
+    <div>Loading...</div>
+    <script type="module" crossorigin>
+        import { RRMapParser } from "./zone/js-modules/rr-map-parser.js";
+        import { VacuumMap } from "./zone/js-modules/vacuum-map.js"
+        window.fn.parseBinaryMap = function(gzippedMap) { return RRMapParser.PARSE(pako.inflate(gzippedMap)) || {}; };
+        window.fn.createVacuumMap = function(canvasElement) { return new VacuumMap(canvasElement); }
+
         ons.ready(function () {
+            waitForGlobals.then(() => document.getElementById("appNavigator").pushPage('app-splitter.html'));
+
             // todo: make it work without timeout hacks
             switch (window.location.hash) {
                 case '#home': break;
@@ -269,19 +271,18 @@
                 }
             }, false);
         });
+        </script>
 
-        if (ons.platform.isIPhoneX()) {
-            document.documentElement.setAttribute('onsflag-iphonex-portrait', '');
-        }
-    </script>
-    <ons-navigator id="appNavigator" swipeable swipe-target-width="80px">
-        <ons-page>
+    <ons-navigator id="appNavigator" swipeable swipe-target-width="80px"></ons-navigator>
+
+    <template id="app-splitter.html">
+        <ons-page id="app-splitter-page">
             <ons-splitter id="appSplitter">
                 <ons-splitter-side id="sidemenu" page="sidemenu.html" swipeable side="left" collapse="" width="260px"></ons-splitter-side>
                 <ons-splitter-content page="tabbar.html"></ons-splitter-content>
             </ons-splitter>
         </ons-page>
-    </ons-navigator>
+    </template>
 
     <template id="tabbar.html">
         <ons-page id="tabbar-page">

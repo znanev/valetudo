@@ -118,15 +118,14 @@
         };
         function updateSettingsAccessControlPage() {
             loadingBarSettingsAccessControl.setAttribute("indeterminate", "indeterminate");
-
-            const getAuthCfg = fn.prequest("api/http_auth_config", "GET")
+            const getAuthCfg = fn.prequest("api/http_auth_config")
             .then((res) => {
                 httpAuthInputEnabled.checked = res.enabled;
                 httpAuthInputUsername.value = res.username;
                 httpAuthInputPassword.value = "";
             },(err) => fn.notificationToastError(err));
 
-            const getSshCfg = fn.prequest("api/get_ssh_keys", "GET")
+            const getSshCfg = fn.prequest("api/get_ssh_keys")
             .then((res) => {
                 sshKeysTextArea.value = res;
                 sshKeysTitle.style.display = "block";
@@ -140,7 +139,7 @@
             fn.prequestWithPayload("api/set_ssh_keys", JSON.stringify({
                  keys: sshKeysTextArea.value
             }), "PUT")
-            .then(null, (err) => fn.notificationToastError(err))
+            .then((res) => fn.notificationToastOK(i18next.t('common.ok',"OK")), (err) => fn.notificationToastError(err))
             .finally(() => loadingBarSettingsAccessControl.removeAttribute("indeterminate"));
         };
         function handleSSHKeysSettingsPermanentlyDisableButton() {
@@ -151,6 +150,7 @@
             .then((res) => {
                 sshKeysTitle.style.display = "none";
                 sshKeysList.style.display = "none";
+                fn.notificationToastOK(i18next.t('common.ok',"OK"));
             }, (err) => fn.notificationToastError(err))
             .finally(() => loadingBarSettingsAccessControl.removeAttribute("indeterminate"));
         };
@@ -164,7 +164,7 @@
                 username: httpAuthInputUsername.value,
                 password: httpAuthInputPassword.value,
             }), "PUT")
-            .then(null, (err) => fn.notificationToastError(err))
+            .then((res) => fn.notificationToastOK(i18next.t('common.ok',"OK")), (err) => fn.notificationToastError(err))
             .finally(() => loadingBarSettingsAccessControl.removeAttribute("indeterminate"));
         };
     </script>

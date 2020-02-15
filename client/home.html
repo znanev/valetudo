@@ -41,27 +41,27 @@
 
 
     <script>
-        var currentRefreshTimer, refreshInProgress = false;
-        var toastInProgress = false;
+        var currentRefreshTimer, refreshInProgress = false, refreshDisabled = true;
 
-        var startButton = document.getElementById("start-button");
-        var pauseButton = document.getElementById("pause-button");
-        var stopButton = document.getElementById("stop-button");
-        var spotButton = document.getElementById("spot-button");
-        var goToButton = document.getElementById("go-to-button");
-        var areaButton = document.getElementById("area-button");
-        var storeMapButton = document.getElementById("store-map-button");
-        var loadMapButton = document.getElementById("load-map-button");
-        var fanspeedButton = document.getElementById("fanspeed-button");
-        var findRobotButton = document.getElementById("find-robot-button");
-        var homeButton = document.getElementById("home-button");
-        var batteryStatusText = document.getElementById('battery-status-text-value');
-        var batteryStatusBar = document.getElementById('battery-status-bar');
-        var robotState = document.getElementById('robot-state');
-        var robotStateDetailsM2 = document.getElementById("robot-state-details-m2-value");
-        var robotStateDetailsTime = document.getElementById("robot-state-details-time-value");
-        var loadingBarHome = document.getElementById('loading-bar-home');
+        var startButton = document.getElementById("start-button"),
+            pauseButton = document.getElementById("pause-button"),
+            stopButton = document.getElementById("stop-button"),
+            spotButton = document.getElementById("spot-button"),
+            goToButton = document.getElementById("go-to-button"),
+            areaButton = document.getElementById("area-button"),
+            storeMapButton = document.getElementById("store-map-button"),
+            loadMapButton = document.getElementById("load-map-button"),
+            fanspeedButton = document.getElementById("fanspeed-button"),
+            findRobotButton = document.getElementById("find-robot-button"),
+            homeButton = document.getElementById("home-button"),
+            batteryStatusText = document.getElementById('battery-status-text-value'),
+            batteryStatusBar = document.getElementById('battery-status-bar'),
+            robotState = document.getElementById('robot-state'),
+            robotStateDetailsM2 = document.getElementById("robot-state-details-m2-value"),
+            robotStateDetailsTime = document.getElementById("robot-state-details-time-value"),
+            loadingBarHome = document.getElementById('loading-bar-home');
 
+        var fanspeedPresets = {};
         var config = {};
 
         var BUTTONS = {
@@ -119,15 +119,6 @@
             }
         }
 
-        var fanspeedPresets = {
-            1: i18next.t('home.fanspeedPresets.whisper',"Whisper"),
-            38: i18next.t('home.fanspeedPresets.quiet',"Quiet"),
-            60: i18next.t('home.fanspeedPresets.balanced',"Balanced"),
-            75: i18next.t('home.fanspeedPresets.turbo',"Turbo"),
-            100: i18next.t('home.fanspeedPresets.max',"Max"),
-            105: i18next.t('home.fanspeedPresets.mop',"Mop")
-        };
-
         function handleFanspeedButton() {
             window.clearTimeout(currentRefreshTimer);
 
@@ -167,89 +158,193 @@
 
         function handleGoToButton() {
             window.clearTimeout(currentRefreshTimer);
-            var options = [];
-
-            for(var i = 0; i < config.spots.length; i++) {
-                options.push(config.spots[i][0]);
-            }
-
-            options.push({
-                label: i18next.t('common.cancel',"Cancel"),
-                icon: 'md-close'
-            });
-
-            ons.openActionSheet({
-                title: i18next.t('home.popups.selectGotoTarget',"Select go to target:"),
-                cancelable: true,
-                buttons: options
+            loadingBarHome.setAttribute("indeterminate", "indeterminate");
+            var spots;
+            fn.prequest("api/spots")
+            .then(res => {
+                loadingBarHome.removeAttribute("indeterminate");
+                spots = res;
+                spots.sort((a, b) => a.name.localeCompare(b.name));
+                var options = [];
+                for (var i = 0; i < spots.length; i++) {
+                    options.push(spots[i].name);
+                }
+                options.push({
+                    label: i18next.t('common.cancel',"Cancel"),
+                    icon: 'md-close'
+                });
+                let openActionSheet = ons.openActionSheet({
+                    title: i18next.t('home.popups.selectGotoTarget',"Select go to target:"),
+                    cancelable: true,
+                    buttons: options
+                });
+                var spotButtons = document.querySelectorAll('ons-action-sheet-button');
+                for (var i = 0; i < spotButtons.length; i++) {
+                    if (!i) spotButtons[i].parentNode.parentNode.title = '';
+                    spotButtons[i].title = ''; // get rid of stupid title repeating on all buttons
+                }
+                return openActionSheet;
             }).then(index => {
-                if(index > -1 && index < config.spots.length) {
-                    if (!localStorage.getItem('settingsWebifGotoImmediate')) {
+                if(index > -1 && index < spots.length) {
+                    if (spots[index].coordinates[0] === null) spots[index].coordinates = [25500,25500]; // todo: show message about spot is undefined or something
+                    if (!fn.webifSettings.gotoImmediate) {
                         document.getElementById('appTabbar').setActiveTab(1,{callback: function() {
-                            fn.updateMapPage(true)
-                            .then(function(map) {
-                                map.addSpot([config.spots[index][1],config.spots[index][2]]);
+                            updateMapPage(true).then(function(map) {
+                                map.addSpot(spots[index].coordinates);
                             })
                             .catch(() => {});
                         }});
+                        return Promise.reject("cancel");
                     } else {
-                        loadingBarHome.setAttribute("indeterminate", "indeterminate");
-                        fn.prequestWithPayload("api/go_to", JSON.stringify({x: config.spots[index][1],y: config.spots[index][2]}), "PUT")
-                        .then(res => window.fn.notificationToastOK())
-                        .catch(e => window.fn.notificationToastError(e))
-                        .finally(() => {
-                            window.setTimeout(function () {
-                                updateHomePage();
-                            }, 200);
-                        });
+                        return fn.prequestWithPayload("api/go_to", JSON.stringify({x: spots[index].coordinates[0],y: spots[index].coordinates[1]}), "PUT");
                     }
-                } else {
-                    currentRefreshTimer = window.setTimeout(function () {
-                        updateHomePage();
-                    }, 3000);
                 }
+                return Promise.reject("cancel");
+            })
+            .then(res => fn.notificationToastOK())
+            .catch(e => {
+                if (e !== "cancel") fn.notificationToastError(e);
+            })
+            .finally(() => {
+                window.setTimeout(function () {
+                    updateHomePage();
+                }, 200);
             });
         }
 
         function handleAreaButton() {
             window.clearTimeout(currentRefreshTimer);
-            var options = [];
-
-            for(var i = 0; i < config.areas.length; i++) {
-                options.push(config.areas[i][0]);
-            }
-
-            options.push({
-                label: i18next.t('common.submit',"Submit"),
-                icon: 'md-collection-item'
-            },{
-                label: i18next.t('common.cancel',"Cancel"),
-                icon: 'md-close'
-            });
-
-            var payload, calcPayload, markSubmitButton, zoneNumber = 0;
-
-            ons.openActionSheet({
-                title: i18next.t('home.popups.selectZones',"Select zones for cleaning:"),
-                cancelable: true,
-                buttons: options
-            })
-            .then(index => {
-                if(index > -1 && index < config.areas.length){
-                    if (zoneNumber < 2) {
-                        payload = config.areas[index][1];
+            loadingBarHome.setAttribute("indeterminate", "indeterminate");
+            var zones, payload, calcPayload, markSubmitButton, zoneNumber = 0;
+            fn.prequest("api/zones")
+            .then(res => {
+                loadingBarHome.removeAttribute("indeterminate");
+                zones = res;
+                zones.sort((a, b) => a.name.localeCompare(b.name));
+                var options = [];
+                for(var i = 0; i < zones.length; i++) {
+                    options.push(zones[i].name);
+                }
+                options.push({
+                    label: i18next.t('common.submit',"Submit"),
+                    icon: 'md-collection-item'
+                },{
+                    label: i18next.t('common.cancel',"Cancel"),
+                    icon: 'md-close'
+                });
+                let openActionSheet = ons.openActionSheet({
+                    title: i18next.t('home.popups.selectZones',"Select zones for cleaning:"),
+                    cancelable: true,
+                    buttons: options
+                });
+                document.querySelector('ons-action-sheet').classList.add('ons-action-sheet-zoned');
+                var zoneButtons = document.querySelectorAll('ons-action-sheet-button');
+                for (var i = 0; i < zoneButtons.length; i++) {
+                    if (!i) zoneButtons[i].parentNode.parentNode.title = '';
+                    zoneButtons[i].title = ''; // get rid of stupid title repeating on all buttons
+                    if (zoneButtons[i].getAttribute('icon') === null) {
+                        zoneButtons[i].insertAdjacentHTML('beforeend','<label class="zone-cblabel"><input type="checkbox" class="zone-checkbox" data-id="' + i + '"></input></label><span class="zone-numspan"></span>')
+                    } else if (zoneButtons[i].getAttribute('icon') === 'md-close') {
+                        zoneButtons[i].classList.add('action-sheet-button-zcancel','action-sheet-button-half');
+                    } else {
+                        zoneButtons[i].classList.add('action-sheet-button-zsubmit','action-sheet-button-half', 'zdisabled');
                     }
-                    if (!payload.length) {
-                        ons.notification.alert(i18next.t('home.popups.emptyZoneChosen',"You've chosen an empty zone to clean. Please set it up first."));
-                        currentRefreshTimer = window.setTimeout(function () {
-                            updateHomePage();
-                        }, 3000);
+                }
+                calcPayload = function() {
+                    var payload = [];
+                    var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
+                    for (var i = 0; i < zoneCheckboxes.length; i++) {
+                        if (!zoneCheckboxes[i].dataset.num) {
+                            continue;
+                        }
+                        payload[zoneCheckboxes[i].dataset.num - 1] = zones[zoneCheckboxes[i].dataset.id].coordinates;
+                    }
+                    return payload.reduce((acc, val) => acc.concat(val), []);
+                }
+                markSubmitButton = function() {
+                    var submitButton = document.querySelector('.action-sheet-button[icon="md-collection-item"]');
+                    if (!submitButton) return;
+                    submitButton.classList.toggle('zdisabled',!calcPayload().length);
+                }
+                document.querySelector('ons-action-sheet').addEventListener('click',function(e) {
+                    if (e.button || e.target.getAttribute('icon') === 'md-close') { return; }
+                    if (e.target.className === 'zone-cblabel') {
+                        e.stopPropagation();
                         return;
                     }
-                    if (!localStorage.getItem('settingsWebifZonedImmediate')) {
+                    if (e.target.className === 'zone-checkbox') {
+                        e.stopPropagation();
+                        if (e.target.checked) {
+                            // checked right now
+                            var attemptedLength = calcPayload().length + zones[e.target.dataset.id].coordinates.length;
+                            if (attemptedLength > 5) {
+                                ons.notification.alert(i18next.t('home.popups.tooManyZones',{defaultValue: "You've attempted to choose {{count}} subzones, while it is possible to use 5 subzones at most.", count: attemptedLength}),{title: i18next.t('common.attention',"Attention!")});
+                                e.target.checked = false;
+                                return;
+                            }
+                            e.target.dataset.num = ++zoneNumber;
+                            e.target.parentNode.nextElementSibling.textContent = '[' + e.target.dataset.num + '/' + zones[e.target.dataset.id].coordinates.length + ']';
+                            e.target.parentNode.parentNode.classList.add('zone_selected');
+                        } else {
+                            // unchecked
+                            var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
+                            for (var i = 0; i < zoneCheckboxes.length; i++) {
+                                if (zoneCheckboxes[i].checked && zoneCheckboxes[i].dataset.num > e.target.dataset.num) {
+                                    zoneCheckboxes[i].dataset.num--;
+                                    zoneCheckboxes[i].parentNode.nextElementSibling.textContent = '[' + zoneCheckboxes[i].dataset.num + '/' + zones[zoneCheckboxes[i].dataset.id].coordinates.length + ']';
+                                }
+                            }
+                            zoneNumber--;
+                            delete e.target.dataset.num;
+                            e.target.parentNode.nextElementSibling.textContent = '';
+                            e.target.parentNode.parentNode.classList.remove('zone_selected');
+                        }
+                        markSubmitButton();
+                    } else if (e.target.getAttribute('icon') === 'md-collection-item') {
+                        e.stopPropagation();
+                        if (calcPayload().length) {
+                            var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
+                            for (var i = 0; i < zoneCheckboxes.length; i++) {
+                                if (zoneCheckboxes[i].checked) {
+                                    zoneCheckboxes[i].parentNode.parentNode.click();
+                                    break;
+                                }
+                            }
+                        }
+                    } else if (zoneNumber > 0) {
+                        let findCheckbox = e.target.querySelector('.zone-checkbox');
+                        if (!findCheckbox || !findCheckbox.checked) {
+                            e.stopPropagation();
+                            var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
+                            for (var i = 0; i < zoneCheckboxes.length; i++) {
+                                if (zoneCheckboxes[i].checked) {
+                                    delete zoneCheckboxes[i].dataset.num;
+                                    zoneCheckboxes[i].parentNode.nextElementSibling.textContent = '';
+                                    zoneCheckboxes[i].parentNode.parentNode.classList.remove('zone_selected');
+                                    zoneCheckboxes[i].checked = false;
+                                }
+                            }
+                            zoneNumber = 0;
+                        } else {
+                            payload = calcPayload();
+                        }
+                        markSubmitButton();
+                    }
+                },true);
+                return openActionSheet;
+            })
+            .then(index => {
+                if(index > -1 && index < zones.length){
+                    if (zoneNumber < 2) {
+                        payload = zones[index].coordinates;
+                    }
+                    if (!payload.length) {
+                        ons.notification.alert(i18next.t('home.popups.emptyZoneChosen',"You've chosen an empty zone to clean. Please set it up first."),{title: i18next.t('common.attention',"Attention!")});
+                        return Promise.reject("cancel");
+                    }
+                    if (!fn.webifSettings.zonedImmediate) {
                         document.getElementById('appTabbar').setActiveTab(1,{callback: function() {
-                            fn.updateMapPage(true)
-                            .then(function(map) {
+                            updateMapPage(true).then(function(map) {
                                 map.clearZones();
                                 payload.forEach(function(zone) {
                                     map.addZone(zone, true);
@@ -257,117 +352,24 @@
                             })
                             .catch(() => {});
                         }});
+                        return Promise.reject("cancel");
                     } else {
                         loadingBarHome.setAttribute("indeterminate", "indeterminate");
-                        fn.prequestWithPayload("api/start_cleaning_zone", JSON.stringify(payload), "PUT")
-                        .then(res => fn.notificationToastOK())
-                        .catch(e => fn.notificationToastError(e))
-                        .finally(() => {
-                            window.setTimeout(function () {
-                                updateHomePage();
-                            }, 200);
-                        });
+                        return fn.prequestWithPayload("api/start_cleaning_zone", JSON.stringify(payload), "PUT")
                     }
                 } else {
-                    currentRefreshTimer = window.setTimeout(function () {
-                        updateHomePage();
-                    }, 3000);
+                    return Promise.reject("cancel");
                 }
+            })
+            .then(res => fn.notificationToastOK())
+            .catch(e => {
+                if (e !== "cancel") fn.notificationToastError(e);
+            })
+            .finally(() => {
+                window.setTimeout(function () {
+                    updateHomePage();
+                }, 200);
             });
-            document.querySelector('ons-action-sheet').classList.add('ons-action-sheet-zoned');
-            var zoneButtons = document.querySelectorAll('ons-action-sheet-button');
-            for (var i = 0; i < zoneButtons.length; i++) {
-                if (!i) zoneButtons[i].parentNode.parentNode.title = '';
-                zoneButtons[i].title = ''; // get rid of stupid title repeating on all buttons
-                if (zoneButtons[i].getAttribute('icon') === null) {
-                    zoneButtons[i].insertAdjacentHTML('beforeend','<label class="zone-cblabel"><input type="checkbox" class="zone-checkbox" data-id="' + i + '"></input></label><span class="zone-numspan"></span>')
-                } else if (zoneButtons[i].getAttribute('icon') === 'md-close') {
-                    zoneButtons[i].classList.add('action-sheet-button-zcancel','action-sheet-button-half');
-                } else {
-                    zoneButtons[i].classList.add('action-sheet-button-zsubmit','action-sheet-button-half', 'zdisabled');
-                }
-            }
-            calcPayload = function() {
-                var payload = [];
-                var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
-                for (var i = 0; i < zoneCheckboxes.length; i++) {
-                    if (!zoneCheckboxes[i].dataset.num) {
-                        continue;
-                    }
-                    payload[zoneCheckboxes[i].dataset.num - 1] = config.areas[zoneCheckboxes[i].dataset.id][1];
-                }
-                return payload.reduce((acc, val) => acc.concat(val), []);
-            }
-            markSubmitButton = function() {
-                var submitButton = document.querySelector('.action-sheet-button[icon="md-collection-item"]');
-                if (!submitButton) return;
-                submitButton.classList.toggle('zdisabled',!calcPayload().length);
-            }
-            document.querySelector('ons-action-sheet').addEventListener('click',function(e) {
-                if (e.button || e.target.getAttribute('icon') === 'md-close') { return; }
-                if (e.target.className === 'zone-cblabel') {
-                    e.stopPropagation();
-                    return;
-                }
-                if (e.target.className === 'zone-checkbox') {
-                    e.stopPropagation();
-                    if (e.target.checked) {
-                        // checked right now
-                        var attemptedLength = calcPayload().length + config.areas[e.target.dataset.id][1].length;
-                        if (attemptedLength > 5) {
-                            ons.notification.alert(i18next.t('home.popups.tooManyZones',{defaultValue: "You've attempted to choose {{count}} subzones, while it is possible to use 5 subzones at most.", count: attemptedLength}));
-                            e.target.checked = false;
-                            return;
-                        }
-                        e.target.dataset.num = ++zoneNumber;
-                        e.target.parentNode.nextElementSibling.textContent = '[' + e.target.dataset.num + '/' + config.areas[e.target.dataset.id][1].length + ']';
-                        e.target.parentNode.parentNode.classList.add('zone_selected');
-                    } else {
-                        // unchecked
-                        var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
-                        for (var i = 0; i < zoneCheckboxes.length; i++) {
-                            if (zoneCheckboxes[i].checked && zoneCheckboxes[i].dataset.num > e.target.dataset.num) {
-                                zoneCheckboxes[i].dataset.num--;
-                                zoneCheckboxes[i].parentNode.nextElementSibling.textContent = '[' + zoneCheckboxes[i].dataset.num + '/' + config.areas[zoneCheckboxes[i].dataset.id][1].length + ']';
-                            }
-                        }
-                        zoneNumber--;
-                        delete e.target.dataset.num;
-                        e.target.parentNode.nextElementSibling.textContent = '';
-                        e.target.parentNode.parentNode.classList.remove('zone_selected');
-                    }
-                    markSubmitButton();
-                } else if (e.target.getAttribute('icon') === 'md-collection-item') {
-                    e.stopPropagation();
-                    if (calcPayload().length) {
-                        var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
-                        for (var i = 0; i < zoneCheckboxes.length; i++) {
-                            if (zoneCheckboxes[i].checked) {
-                                zoneCheckboxes[i].parentNode.parentNode.click();
-                                break;
-                            }
-                        }
-                    }
-                } else if (zoneNumber > 0) {
-                    let findCheckbox = e.target.querySelector('.zone-checkbox');
-                    if (!findCheckbox || !findCheckbox.checked) {
-                        e.stopPropagation();
-                        var zoneCheckboxes = document.querySelectorAll('.zone-checkbox');
-                        for (var i = 0; i < zoneCheckboxes.length; i++) {
-                            if (zoneCheckboxes[i].checked) {
-                                delete zoneCheckboxes[i].dataset.num;
-                                zoneCheckboxes[i].parentNode.nextElementSibling.textContent = '';
-                                zoneCheckboxes[i].parentNode.parentNode.classList.remove('zone_selected');
-                                zoneCheckboxes[i].checked = false;
-                            }
-                        }
-                        zoneNumber = 0;
-                    } else {
-                        payload = calcPayload();
-                    }
-                    markSubmitButton();
-                }
-            },true);
         }
 
         function handleStoreMapButton() {
@@ -384,7 +386,7 @@
                 }
                 slotName = slot;
                 loadingBarHome.setAttribute("indeterminate", "indeterminate");
-                return fn.prequest("api/list_maps", "GET");
+                return fn.prequest("api/list_maps");
             })
             .then(res => {
                 if (res.includes(slotName)) {
@@ -414,8 +416,9 @@
             window.clearTimeout(currentRefreshTimer);
             loadingBarHome.setAttribute("indeterminate", "indeterminate");
             let slots = [], options = [];
-            fn.prequest("api/list_maps", "GET")
+            fn.prequest("api/list_maps")
             .then(data => {
+                data.sort((a, b) => a.localeCompare(b));
                 loadingBarHome.removeAttribute("indeterminate");
                 slots = data;
                 for (var i = 0; i < data.length; i++) {
@@ -501,13 +504,13 @@
         }
 
         function updateHomePage() {
-            if (refreshInProgress) {
+            if (refreshInProgress || refreshDisabled) {
                 return;
             }
             refreshInProgress = true;
             window.clearTimeout(currentRefreshTimer);
             loadingBarHome.setAttribute("indeterminate", "indeterminate");
-            fn.prequest("api/current_status", "GET")
+            fn.prequest("api/current_status")
             .then((res) => {
                 batteryStatusText.textContent = res.battery;
                 batteryStatusBar.value = res.battery;
@@ -520,7 +523,7 @@
                         ' <ons-icon icon="fa-exclamation-triangle"></ons-icon></span>';
                 }
 
-                if (res.in_cleaning === 1 || res.in_cleaning === 2 || res.state === 11 || res.state === 16) {
+                if (res.in_cleaning > 0 || res.state === 11 || res.state === 16) {
                     if ([2,3,10].includes(res.state)) {
                         pauseButton.setAttribute("disabled", "disabled");
                         startButton.removeAttribute("disabled");
@@ -544,7 +547,7 @@
                     stopButton.removeAttribute("disabled");
                 }
 
-                if ([5,6,8,9,11,16,17].includes(res.state)) {
+                if ([5,6,8,9,11,16,17,18].includes(res.state)) {
                     homeButton.setAttribute("disabled", "disabled");
                 } else {
                     homeButton.removeAttribute("disabled");
@@ -565,14 +568,25 @@
                 }
 
                 robotStateDetailsM2.textContent = ("00" + (res.clean_area / 1000000).toFixed(2)).slice(-6);
-                robotStateDetailsTime.textContent = window.fn.secondsToHms(res.clean_time);
-                fanspeedButton.innerHTML = "<ons-icon icon=\"fa-superpowers\"></ons-icon> " + (fanspeedPresets[res.fan_power] || `Custom ${res.fan_power}%`);
-            }, (err) => {
-                if (!toastInProgress) {
-                    toastInProgress = true;
-                    ons.notification.toast(err, { buttonLabel: i18next.t('common.dismiss',"Dismiss"), timeout: window.fn.toastErrorTimeout }).then(() => { toastInProgress = false; });
+                robotStateDetailsTime.textContent = fn.secondsToHms(res.clean_time);
+
+                fanspeedPresets = fn.device.ver !== 3 ? {
+                    1: i18next.t('home.fanspeedPresets.whisper',"Whisper"),
+                    38: i18next.t('home.fanspeedPresets.quiet',"Quiet"),
+                    60: i18next.t('home.fanspeedPresets.balanced',"Balanced"),
+                    75: i18next.t('home.fanspeedPresets.turbo',"Turbo"),
+                    100: i18next.t('home.fanspeedPresets.max',"Max")
+                } : {
+                    101: i18next.t('home.fanspeedPresets.quiet',"Quiet"),
+                    102: i18next.t('home.fanspeedPresets.balanced',"Balanced"),
+                    103: i18next.t('home.fanspeedPresets.turbo',"Turbo"),
+                    104: i18next.t('home.fanspeedPresets.max',"Max")
+                };
+                if (fn.device.model === "roborock.vacuum.s5") {
+                    fanspeedPresets[105] = i18next.t('home.fanspeedPresets.mop',"Mop");
                 }
-            })
+                fanspeedButton.innerHTML = "<ons-icon icon=\"fa-superpowers\"></ons-icon> " + (fanspeedPresets[res.fan_power] || `Custom ${res.fan_power}%`);
+            }, (err) => fn.notificationToastError(err))
             .finally(() => {
                 refreshInProgress = false;
                 loadingBarHome.removeAttribute("indeterminate");
@@ -590,18 +604,19 @@
         }
 
         ons.getScriptPage().onShow = function () {
-            /* reset inProgress */
-            refreshInProgress = false;
+            refreshDisabled = false;
             /* multimap visibility */
-            document.getElementById('multimap-buttons').style.display = localStorage.getItem('settingsWebifShowMultimap') ? '' : 'none';
+            document.getElementById('multimap-buttons').style.display = fn.webifSettings.showMultimap ? '' : 'none';
             /* check for area and go to configuration */
-            fn.prequest("api/get_config", "GET")
+            fn.prequest("api/get_config")
             .then((res) => {
                 config = res;
-                if (config.spots && config.spots.length > 0)
+                if (config.spots && config.spots.length > 0) {
                     goToButton.removeAttribute("disabled");
-                if (config.areas && config.areas.length > 0)
+                }
+                if (config.areas && config.areas.length > 0) {
                     areaButton.removeAttribute("disabled");
+                }
             })
             .catch(err => fn.notificationToastError(err))
             .finally(() => {
@@ -610,8 +625,7 @@
         };
 
         ons.getScriptPage().onHide = function () {
-            /* a hack to disable getting refreshes in background on other pages */
-            refreshInProgress = true;
+            refreshDisabled = true;
             window.clearTimeout(currentRefreshTimer);
         }
 
@@ -650,7 +664,7 @@
 
         .action-sheet {
             max-height: 100%;
-            overflow-y: scroll;
+            overflow-y: auto;
         }
         .action-sheet-button.zone_selected {
             background-color: #c9c9c9;
